@@ -57,15 +57,15 @@ const WaitingRoom = () => {
 
             {/* Room Code */}
             <div className="mb-8">
-              <div className="bg-dark-900/50 rounded-2xl p-6 border-2 border-dark-700">
-                <p className="text-sm text-dark-400 text-center mb-2">
+              <div className="bg-dark-900/50 rounded-2xl p-4 sm:p-6 border-2 border-dark-700">
+                <p className="text-sm text-dark-400 text-center mb-3 sm:mb-2">
                   Código de Sala
                 </p>
-                <div className="flex items-center justify-center gap-4">
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-3 sm:gap-4">
                   <motion.span
                     initial={{ scale: 0 }}
                     animate={{ scale: 1 }}
-                    className="text-5xl font-black text-gradient tracking-wider"
+                    className="text-3xl xs:text-4xl sm:text-5xl font-black text-gradient tracking-wider break-all text-center"
                   >
                     {roomCode}
                   </motion.span>
@@ -74,6 +74,7 @@ const WaitingRoom = () => {
                     variant="secondary"
                     size="sm"
                     icon={copied ? Check : Copy}
+                    className="w-full sm:w-auto"
                   >
                     {copied ? 'Copiado' : 'Copiar'}
                   </Button>

@@ -1,6 +1,6 @@
 import { motion } from 'framer-motion';
 import Confetti from 'react-confetti';
-import { Trophy, ArrowRight, RotateCcw } from 'lucide-react';
+import { Trophy, ArrowRight, XCircle } from 'lucide-react';
 import { useGame } from '../../hooks/useGame';
 import { useWindowSize } from '../../hooks/useWindowSize';
 import { CATEGORY_LABELS } from '../../utils/constants';
@@ -112,13 +112,24 @@ const RoundResults = () => {
                               <span
                                 className={`
                                   inline-block px-2 py-1 rounded text-xs font-bold
+                                  ${score.status === 'invalidated' ? 'bg-red-500/20 text-red-400 line-through' : ''}
                                   ${score.points === 100 ? 'bg-green-500/20 text-green-400' : ''}
                                   ${score.points === 50 ? 'bg-yellow-500/20 text-yellow-400' : ''}
-                                  ${score.points === 0 ? 'bg-red-500/20 text-red-400' : ''}
+                                  ${score.points === 0 && score.status !== 'invalidated' ? 'bg-red-500/20 text-red-400' : ''}
                                 `}
                               >
-                                {score.points}
+                                {score.status === 'invalidated' ? (
+                                  <span className="flex items-center gap-1">
+                                    <XCircle className="w-3 h-3" />
+                                    0
+                                  </span>
+                                ) : (
+                                  score.points
+                                )}
                               </span>
+                              {score.status === 'invalidated' && (
+                                <div className="text-xs text-red-400 mt-1">Invalidada</div>
+                              )}
                             </td>
                           );
                         })}

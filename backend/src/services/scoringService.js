@@ -3,7 +3,7 @@ import { CATEGORIES, GAME_CONFIG } from '../utils/constants.js';
 class ScoringService {
   calculateScores(room) {
     const results = [];
-    const answersByCategory = this.groupAnswersByCategory(room.currentAnswers);
+    const answersByCategory = this.groupAnswersByCategory(room.currentAnswers, room);
 
     room.currentAnswers.forEach((playerAnswers, playerId) => {
       const player = room.getPlayer(playerId);
@@ -13,24 +13,39 @@ class ScoringService {
       CATEGORIES.forEach(category => {
         const answer = this.normalizeAnswer(playerAnswers[category]);
 
+        // *** NUEVO: Verificar si la respuesta fue invalidada por votación ***
+        const isInvalidated = room.isAnswerInvalidated(playerId, category);
+
         if (!answer) {
+          // Sin respuesta
           scores[category] = {
             points: GAME_CONFIG.POINTS_EMPTY,
-            status: 'empty'
+            status: 'empty',
+            originalAnswer: ''
+          };
+        } else if (isInvalidated) {
+          // *** Respuesta invalidada por los jugadores ***
+          scores[category] = {
+            points: 0,
+            status: 'invalidated',
+            originalAnswer: playerAnswers[category]
           };
         } else {
+          // Respuesta válida - calcular puntos normalmente
           const categoryAnswers = answersByCategory[category];
           const occurrences = categoryAnswers.filter(a => a === answer).length;
 
           if (occurrences === 1) {
             scores[category] = {
               points: GAME_CONFIG.POINTS_UNIQUE,
-              status: 'unique'
+              status: 'unique',
+              originalAnswer: playerAnswers[category]
             };
           } else {
             scores[category] = {
               points: GAME_CONFIG.POINTS_REPEATED,
-              status: 'repeated'
+              status: 'repeated',
+              originalAnswer: playerAnswers[category]
             };
           }
         }
@@ -60,24 +75,32 @@ class ScoringService {
       round: room.currentRound,
       letter: room.currentLetter,
       results,
+      validationStats: room.getAllValidationStats(),
       timestamp: Date.now()
     });
+
+    console.log(`📊 Scores calculated for round ${room.currentRound}`.green);
 
     return results;
   }
 
-  groupAnswersByCategory(answersMap) {
+  groupAnswersByCategory(answersMap, room) {
     const grouped = {};
 
     CATEGORIES.forEach(category => {
       grouped[category] = [];
     });
 
-    answersMap.forEach((playerAnswers) => {
+    answersMap.forEach((playerAnswers, playerId) => {
       CATEGORIES.forEach(category => {
-        const answer = this.normalizeAnswer(playerAnswers[category]);
-        if (answer) {
-          grouped[category].push(answer);
+        // *** Solo incluir respuestas NO invalidadas ***
+        const isInvalidated = room.isAnswerInvalidated(playerId, category);
+        
+        if (!isInvalidated) {
+          const answer = this.normalizeAnswer(playerAnswers[category]);
+          if (answer) {
+            grouped[category].push(answer);
+          }
         }
       });
     });
@@ -96,6 +119,8 @@ class ScoringService {
       .normalize('NFD')
       .replace(/[\u0300-\u036f]/g, ''); // Remover acentos
   }
+
+  // ==================== MÉTODOS LEGACY (mantener por compatibilidad) ====================
 
   challengeAnswer(room, playerId, category, challengedPlayerId) {
     const roundScore = room.roundScores[room.roundScores.length - 1];
@@ -121,7 +146,6 @@ class ScoringService {
   }
 
   approveAnswer(room, playerId, category) {
-    // No hacer nada, la respuesta ya está aprobada
     console.log(`✅ Answer approved: ${category} for player ${playerId}`.green);
   }
 
@@ -139,7 +163,6 @@ class ScoringService {
       throw new Error('Resultado del jugador no encontrado');
     }
 
-    // Restar los puntos de esa categoría
     const categoryScore = playerResult.scores[category];
     const pointsToDeduct = categoryScore.points;
 
@@ -147,7 +170,6 @@ class ScoringService {
     playerResult.roundScore -= pointsToDeduct;
     playerResult.totalScore = player.totalScore;
 
-    // Marcar como rechazada
     categoryScore.points = 0;
     categoryScore.status = 'rejected';
 
