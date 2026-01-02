@@ -1,6 +1,7 @@
 import { motion } from 'framer-motion';
 import Header from './Header';
 import Footer from './Footer';
+import VoiceChat from '../Game/VoiceChat';
 
 const Layout = ({ children }) => {
   return (
@@ -32,6 +33,7 @@ const Layout = ({ children }) => {
       </main>
       
       <Footer />
+      <VoiceChat />
     </div>
   );
 };

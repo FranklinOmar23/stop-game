@@ -19,6 +19,7 @@
     "react-hot-toast": "^2.6.0",
     "react-router-dom": "^7.11.0",
     "react-spring": "^10.0.3",
+    "simple-peer": "^9.11.1",
     "socket.io-client": "^4.8.3",
     "use-sound": "^5.0.0",
     "zustand": "^5.0.9"
