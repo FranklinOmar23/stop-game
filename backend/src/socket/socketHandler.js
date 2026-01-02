@@ -8,6 +8,47 @@ export const setupSocketHandlers = (io) => {
   io.on('connection', (socket) => {
     console.log(`✅ User connected: ${socket.id}`.green);
 
+     // ==================== WEBRTC SIGNALING ====================
+    
+    // Cuando un jugador quiere iniciar conexión P2P
+    socket.on('webrtc:signal', ({ to, signal, from }) => {
+      console.log(`📡 WebRTC signal from ${from} to ${to}`.cyan);
+      io.to(to).emit('webrtc:signal', {
+        from,
+        signal
+      });
+    });
+
+    // Solicitar conexión con todos los peers de la sala
+    socket.on('webrtc:join-voice', ({ roomCode }) => {
+      try {
+        const room = roomService.getRoom(roomCode);
+        if (!room) return;
+
+        const player = room.getPlayer(socket.id);
+        if (!player) return;
+
+        // Notificar a todos en la sala que este jugador quiere unirse a voz
+        socket.to(roomCode).emit('webrtc:peer-joined', {
+          peerId: socket.id,
+          peerName: player.name
+        });
+
+        console.log(`🎤 ${player.name} joined voice chat in room ${roomCode}`.cyan);
+
+      } catch (error) {
+        console.error('Error joining voice:', error.message);
+      }
+    });
+
+    // Notificar cuando un jugador sale del chat de voz
+    socket.on('webrtc:leave-voice', ({ roomCode }) => {
+      socket.to(roomCode).emit('webrtc:peer-left', {
+        peerId: socket.id
+      });
+    });
+
+
     // ==================== CREAR SALA ====================
     socket.on(CLIENT_EVENTS.CREATE_ROOM, ({ playerName }) => {
       try {
