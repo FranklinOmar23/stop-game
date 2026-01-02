@@ -1,18 +1,77 @@
 import { useEffect, useRef, useState, useCallback } from 'react';
-import SimplePeer from 'simple-peer';
+import Peer from 'peerjs';
 import { useSocket } from './useSocket';
 
 export const useWebRTC = (roomCode, playerName) => {
   const { socket, emit, on, off } = useSocket();
-  const [peers, setPeers] = useState({}); // { peerId: { peer, stream, name, isMuted } }
+  const [peers, setPeers] = useState({});
   const [isInVoiceChat, setIsInVoiceChat] = useState(false);
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState(null);
+  const [myPeerId, setMyPeerId] = useState(null);
   
   const localStreamRef = useRef(null);
-  const peersRef = useRef({});
+  const peerRef = useRef(null);
+  const callsRef = useRef({});
+  const peersDataRef = useRef({});
+  const retryTimeoutsRef = useRef({}); // ← NUEVO: Para reintentos
 
-  // Obtener stream de audio local
+  // Inicializar PeerJS
+  useEffect(() => {
+    const peer = new Peer({
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' },
+        ]
+      }
+    });
+
+    peer.on('open', (id) => {
+      console.log('✅ My peer ID:', id);
+      setMyPeerId(id);
+      peerRef.current = peer;
+    });
+
+    peer.on('call', (call) => {
+      console.log('📞 Receiving call from:', call.peer);
+      
+      if (localStreamRef.current) {
+        call.answer(localStreamRef.current);
+        
+        call.on('stream', (remoteStream) => {
+          console.log('📻 Received stream from:', call.peer);
+          handleRemoteStream(call.peer, remoteStream);
+        });
+
+        call.on('close', () => {
+          console.log('Call closed from:', call.peer);
+          removePeer(call.peer);
+        });
+
+        callsRef.current[call.peer] = call;
+      }
+    });
+
+    peer.on('error', (err) => {
+      console.error('❌ PeerJS error:', err);
+      if (err.type === 'peer-unavailable') {
+        console.log('⚠️ Peer not available, will retry...');
+        // No mostrar error al usuario, es normal
+      } else {
+        setError('Error de conexión P2P');
+      }
+    });
+
+    return () => {
+      peer.destroy();
+      // Limpiar reintentos
+      Object.values(retryTimeoutsRef.current).forEach(timeout => clearTimeout(timeout));
+    };
+  }, []);
+
+  // Obtener stream local
   const getLocalStream = useCallback(async () => {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -25,86 +84,53 @@ export const useWebRTC = (roomCode, playerName) => {
       });
       
       localStreamRef.current = stream;
+      console.log('🎤 Local stream obtained');
       return stream;
     } catch (err) {
-      console.error('Error getting media:', err);
-      setError('No se pudo acceder al micrófono. Verifica los permisos.');
+      console.error('❌ Error getting media:', err);
+      setError('No se pudo acceder al micrófono');
       throw err;
     }
   }, []);
 
-  // Crear peer para un jugador
-  const createPeer = useCallback((peerId, peerName, initiator, stream) => {
-    const peer = new SimplePeer({
-      initiator,
-      stream,
-      trickle: false,
-      config: {
-        iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ]
-      }
-    });
-
-    peer.on('signal', signal => {
-      emit('webrtc:signal', {
-        to: peerId,
-        signal,
-        from: socket.id
-      });
-    });
-
-    peer.on('stream', remoteStream => {
-      console.log(`📻 Received stream from ${peerName}`);
-      
-      setPeers(prev => ({
-        ...prev,
-        [peerId]: {
-          ...prev[peerId],
-          stream: remoteStream,
-          name: peerName
-        }
-      }));
-
-      // Reproducir stream
-      const audio = new Audio();
-      audio.srcObject = remoteStream;
-      audio.play().catch(err => console.error('Error playing audio:', err));
-    });
-
-    peer.on('error', err => {
-      console.error(`Peer error with ${peerId}:`, err);
-    });
-
-    peer.on('close', () => {
-      console.log(`Peer closed: ${peerId}`);
-      removePeer(peerId);
-    });
-
-    peersRef.current[peerId] = { peer, name: peerName };
+  // Manejar stream remoto
+  const handleRemoteStream = useCallback((peerId, stream) => {
+    console.log('🔊 Setting up remote stream for:', peerId);
+    
+    const peerData = peersDataRef.current[peerId] || {};
     
     setPeers(prev => ({
       ...prev,
       [peerId]: {
-        peer,
-        stream: null,
-        name: peerName,
+        stream,
+        name: peerData.name || 'Jugador',
         isMuted: false
       }
     }));
 
-    return peer;
-  }, [socket, emit]);
+    // Reproducir audio
+    const audio = new Audio();
+    audio.srcObject = stream;
+    audio.play().catch(err => console.error('Error playing:', err));
+  }, []);
 
   // Remover peer
   const removePeer = useCallback((peerId) => {
-    if (peersRef.current[peerId]) {
-      peersRef.current[peerId].peer.destroy();
-      delete peersRef.current[peerId];
-    }
+    console.log('❌ Removing peer:', peerId);
     
+    if (callsRef.current[peerId]) {
+      callsRef.current[peerId].close();
+      delete callsRef.current[peerId];
+    }
+
+    // Limpiar timeout de reintento si existe
+    if (retryTimeoutsRef.current[peerId]) {
+      clearTimeout(retryTimeoutsRef.current[peerId]);
+      delete retryTimeoutsRef.current[peerId];
+    }
+
+    delete peersDataRef.current[peerId];
+
     setPeers(prev => {
       const newPeers = { ...prev };
       delete newPeers[peerId];
@@ -112,105 +138,219 @@ export const useWebRTC = (roomCode, playerName) => {
     });
   }, []);
 
+  // Llamar a un peer con reintentos
+  const callPeer = useCallback((peerId, peerName, retryCount = 0) => {
+    const MAX_RETRIES = 5;
+    const RETRY_DELAY = 2000; // 2 segundos
+
+    if (!peerRef.current || !localStreamRef.current) {
+      console.log('⚠️ Cannot call peer, missing stream or peer object');
+      return;
+    }
+
+    // Si ya hay una llamada activa, no reintentar
+    if (callsRef.current[peerId]) {
+      console.log('ℹ️ Call already exists for peer:', peerId);
+      return;
+    }
+
+    console.log(`📞 Calling peer (attempt ${retryCount + 1}/${MAX_RETRIES}):`, peerId, peerName);
+    
+    // Guardar info del peer
+    peersDataRef.current[peerId] = { name: peerName };
+    
+    try {
+      const call = peerRef.current.call(peerId, localStreamRef.current);
+      
+      if (!call) {
+        console.error('❌ Failed to create call');
+        return;
+      }
+
+      let hasReceivedStream = false;
+
+      call.on('stream', (remoteStream) => {
+        console.log('✅ Received stream from:', peerId);
+        hasReceivedStream = true;
+        handleRemoteStream(peerId, remoteStream);
+        
+        // Limpiar timeout de reintento si existe
+        if (retryTimeoutsRef.current[peerId]) {
+          clearTimeout(retryTimeoutsRef.current[peerId]);
+          delete retryTimeoutsRef.current[peerId];
+        }
+      });
+
+      call.on('close', () => {
+        console.log('Call closed with:', peerId);
+        removePeer(peerId);
+      });
+
+      call.on('error', (err) => {
+        console.error('❌ Call error with', peerId, ':', err);
+        
+        // Si no hemos recibido stream y aún hay reintentos, intentar de nuevo
+        if (!hasReceivedStream && retryCount < MAX_RETRIES) {
+          console.log(`🔄 Will retry calling ${peerId} in ${RETRY_DELAY}ms...`);
+          
+          retryTimeoutsRef.current[peerId] = setTimeout(() => {
+            console.log(`🔄 Retrying call to ${peerId}...`);
+            delete callsRef.current[peerId];
+            callPeer(peerId, peerName, retryCount + 1);
+          }, RETRY_DELAY);
+        } else if (retryCount >= MAX_RETRIES) {
+          console.error(`❌ Max retries reached for ${peerId}`);
+          setError(`No se pudo conectar con ${peerName}`);
+        }
+      });
+
+      callsRef.current[peerId] = call;
+
+      // Timeout de seguridad: si después de 5 segundos no hay stream, reintentar
+      setTimeout(() => {
+        if (!hasReceivedStream && retryCount < MAX_RETRIES) {
+          console.log(`⏰ Timeout waiting for stream from ${peerId}, retrying...`);
+          call.close();
+          delete callsRef.current[peerId];
+          callPeer(peerId, peerName, retryCount + 1);
+        }
+      }, 5000);
+
+    } catch (err) {
+      console.error('❌ Exception calling peer:', err);
+      
+      if (retryCount < MAX_RETRIES) {
+        retryTimeoutsRef.current[peerId] = setTimeout(() => {
+          callPeer(peerId, peerName, retryCount + 1);
+        }, RETRY_DELAY);
+      }
+    }
+  }, [handleRemoteStream, removePeer]);
+
   // Unirse al chat de voz
   const joinVoiceChat = useCallback(async () => {
+    if (!myPeerId) {
+      setError('Esperando conexión P2P...');
+      return;
+    }
+
     try {
       setError(null);
-      const stream = await getLocalStream();
+      await getLocalStream();
       
-      // Notificar al servidor
-      emit('webrtc:join-voice', { roomCode });
+      console.log('🎤 Joining voice chat with peer ID:', myPeerId);
+      
+      // Notificar al servidor con mi peer ID
+      emit('webrtc:join-voice', { 
+        roomCode,
+        peerId: myPeerId 
+      });
       
       setIsInVoiceChat(true);
-      console.log('🎤 Joined voice chat');
       
     } catch (err) {
-      console.error('Failed to join voice chat:', err);
+      console.error('❌ Failed to join:', err);
       setError('No se pudo acceder al micrófono');
     }
-  }, [roomCode, emit, getLocalStream]);
+  }, [roomCode, myPeerId, emit, getLocalStream]);
 
   // Salir del chat de voz
   const leaveVoiceChat = useCallback(() => {
-    // Detener stream local
+    console.log('🔇 Leaving voice chat');
+    
+    // Limpiar timeouts de reintento
+    Object.values(retryTimeoutsRef.current).forEach(timeout => clearTimeout(timeout));
+    retryTimeoutsRef.current = {};
+    
+    // Detener stream
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
       localStreamRef.current = null;
     }
 
-    // Cerrar todas las conexiones peer
-    Object.keys(peersRef.current).forEach(peerId => {
-      peersRef.current[peerId].peer.destroy();
-    });
-
-    peersRef.current = {};
-    setPeers({});
+    // Cerrar llamadas
+    Object.values(callsRef.current).forEach(call => call.close());
+    callsRef.current = {};
+    peersDataRef.current = {};
     
+    setPeers({});
     emit('webrtc:leave-voice', { roomCode });
     setIsInVoiceChat(false);
     
-    console.log('🔇 Left voice chat');
   }, [roomCode, emit]);
 
-  // Mutear/desmutear
+  // Toggle mute
   const toggleMute = useCallback(() => {
     if (localStreamRef.current) {
       const audioTrack = localStreamRef.current.getAudioTracks()[0];
       if (audioTrack) {
         audioTrack.enabled = !audioTrack.enabled;
         setIsMuted(!audioTrack.enabled);
+        console.log('🎤 Muted:', !audioTrack.enabled);
       }
     }
   }, []);
 
-  // Escuchar eventos WebRTC
+  // Escuchar eventos del servidor
   useEffect(() => {
-    if (!socket || !isInVoiceChat) return;
+    if (!socket || !isInVoiceChat || !myPeerId) {
+      return;
+    }
 
-    // Cuando un nuevo peer se une
+    console.log('👂 Listening to WebRTC events');
+
+    // Peers existentes cuando me uno
+    const handleExistingPeers = ({ peers: existingPeers }) => {
+      console.log('📋 Received existing peers:', existingPeers.length);
+      
+      if (existingPeers.length === 0) {
+        console.log('   ℹ️ No existing peers');
+        return;
+      }
+      
+      // Esperar 2 segundos antes de empezar a llamar para dar tiempo a que el otro peer esté listo
+      setTimeout(() => {
+        existingPeers.forEach(({ peerId, peerName }) => {
+          if (peerId !== myPeerId) {
+            console.log(`   📞 Calling existing peer: ${peerName}`);
+            callPeer(peerId, peerName);
+          }
+        });
+      }, 2000);
+    };
+
+    // Nuevo peer se une
     const handlePeerJoined = ({ peerId, peerName }) => {
-      console.log(`👤 Peer joined: ${peerName} (${peerId})`);
+      console.log('👤 New peer joined:', peerName);
       
-      // Solo crear conexión si el stream local existe
-      if (localStreamRef.current) {
-        createPeer(peerId, peerName, true, localStreamRef.current);
+      if (peerId === myPeerId || !localStreamRef.current) {
+        return;
       }
+
+      // Esperar 2 segundos antes de llamar
+      setTimeout(() => {
+        console.log(`   📞 Calling new peer: ${peerName}`);
+        callPeer(peerId, peerName);
+      }, 2000);
     };
 
-    // Cuando recibimos señal de otro peer
-    const handleSignal = ({ from, signal }) => {
-      console.log(`📡 Received signal from ${from}`);
-      
-      if (peersRef.current[from]) {
-        // Ya existe el peer, solo procesar la señal
-        peersRef.current[from].peer.signal(signal);
-      } else {
-        // Crear nuevo peer (no iniciador)
-        if (localStreamRef.current) {
-          const peer = createPeer(from, 'Jugador', false, localStreamRef.current);
-          peer.signal(signal);
-        }
-      }
+    // Peer se va
+    const handlePeerLeft = ({ socketId }) => {
+      console.log('👋 Peer left:', socketId);
     };
 
-    // Cuando un peer se va
-    const handlePeerLeft = ({ peerId }) => {
-      console.log(`👋 Peer left: ${peerId}`);
-      removePeer(peerId);
-    };
-
+    on('webrtc:existing-peers', handleExistingPeers);
     on('webrtc:peer-joined', handlePeerJoined);
-    on('webrtc:signal', handleSignal);
     on('webrtc:peer-left', handlePeerLeft);
 
     return () => {
+      off('webrtc:existing-peers', handleExistingPeers);
       off('webrtc:peer-joined', handlePeerJoined);
-      off('webrtc:signal', handleSignal);
       off('webrtc:peer-left', handlePeerLeft);
     };
-  }, [socket, isInVoiceChat, createPeer, removePeer, on, off]);
+  }, [socket, isInVoiceChat, myPeerId, callPeer, on, off]);
 
-  // Cleanup al desmontar
+  // Cleanup
   useEffect(() => {
     return () => {
       if (isInVoiceChat) {
@@ -227,6 +367,7 @@ export const useWebRTC = (roomCode, playerName) => {
     isInVoiceChat,
     isMuted,
     error,
-    peerCount: Object.keys(peers).length
+    peerCount: Object.keys(peers).length,
+    isReady: !!myPeerId
   };
 };

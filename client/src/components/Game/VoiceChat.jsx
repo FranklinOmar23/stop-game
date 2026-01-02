@@ -9,12 +9,12 @@ import {
   Users,
   AlertCircle,
   ChevronDown,
-  ChevronUp
+  Loader2
 } from 'lucide-react';
-import { useGame } from '../../hooks/useGame';
-import { useWebRTC } from '../../hooks/useWebRTC';
-import Button from '../shared/Button';
-import Badge from '../shared/Badge';
+import { useGame } from '@/hooks/useGame';
+import { useWebRTC } from '@/hooks/useWebRTC';
+import Button from '@/components/shared/Button';
+import Badge from '@/components/shared/Badge';
 
 const VoiceChat = () => {
   const { roomCode, player } = useGame();
@@ -26,7 +26,8 @@ const VoiceChat = () => {
     isInVoiceChat,
     isMuted,
     error,
-    peerCount
+    peerCount,
+    isReady
   } = useWebRTC(roomCode, player?.name);
 
   const [isExpanded, setIsExpanded] = useState(false);
@@ -131,15 +132,25 @@ const VoiceChat = () => {
                       <li>• Habla con otros jugadores</li>
                       <li>• Solo audio, sin vídeo</li>
                       <li>• Conexión directa P2P</li>
+                      <li>• 100% gratis, sin límites</li>
                     </ul>
                   </div>
 
+                  {/* Connection status */}
+                  {!isReady && (
+                    <div className="flex items-center justify-center gap-2 text-sm text-yellow-400">
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                      <span>Conectando sistema P2P...</span>
+                    </div>
+                  )}
+
                   <Button
                     onClick={joinVoiceChat}
+                    disabled={!isReady}
                     className="w-full"
-                    icon={Phone}
+                    icon={isReady ? Phone : Loader2}
                   >
-                    Unirse al Chat de Voz
+                    {isReady ? 'Unirse al Chat de Voz' : 'Conectando...'}
                   </Button>
                 </div>
               )}
@@ -157,24 +168,31 @@ const VoiceChat = () => {
 
                   {/* Participants */}
                   <div>
-                    <div className="flex items-center gap-2 mb-3">
-                      <Users className="w-4 h-4 text-dark-400" />
-                      <span className="text-sm text-dark-400">
-                        {peerCount + 1} en llamada
-                      </span>
+                    <div className="flex items-center justify-between mb-3">
+                      <div className="flex items-center gap-2">
+                        <Users className="w-4 h-4 text-dark-400" />
+                        <span className="text-sm text-dark-400">
+                          En llamada
+                        </span>
+                      </div>
+                      <Badge variant="success" size="sm">
+                        {peerCount + 1}
+                      </Badge>
                     </div>
 
                     <div className="space-y-2 max-h-40 overflow-y-auto">
                       {/* Local user */}
-                      <div className="flex items-center gap-2 bg-dark-900 rounded-lg p-3">
+                      <div className="flex items-center gap-2 bg-dark-900 rounded-lg p-3 border-2 border-primary-500/50">
                         <div className={`w-2 h-2 rounded-full ${
                           isMuted ? 'bg-red-400' : 'bg-green-400 animate-pulse'
                         }`} />
                         <span className="text-sm flex-1 font-semibold">
                           {player?.name} (Tú)
                         </span>
-                        {isMuted && (
+                        {isMuted ? (
                           <MicOff className="w-4 h-4 text-red-400" />
+                        ) : (
+                          <Mic className="w-4 h-4 text-green-400" />
                         )}
                       </div>
 
@@ -184,6 +202,7 @@ const VoiceChat = () => {
                           key={index}
                           initial={{ opacity: 0, x: -10 }}
                           animate={{ opacity: 1, x: 0 }}
+                          transition={{ delay: index * 0.1 }}
                           className="flex items-center gap-2 bg-dark-900 rounded-lg p-3"
                         >
                           <div className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
@@ -194,10 +213,39 @@ const VoiceChat = () => {
                         </motion.div>
                       ))}
 
+                      {/* Empty state */}
                       {peerCount === 0 && (
-                        <p className="text-xs text-dark-500 text-center py-4">
-                          Esperando otros jugadores...
-                        </p>
+                        <motion.div
+                          initial={{ opacity: 0 }}
+                          animate={{ opacity: 1 }}
+                          className="text-center py-4 bg-dark-900/50 rounded-lg"
+                        >
+                          <div className="flex flex-col items-center gap-2">
+                            <div className="flex gap-1">
+                              <motion.div
+                                animate={{ opacity: [0.3, 1, 0.3] }}
+                                transition={{ duration: 1.5, repeat: Infinity, delay: 0 }}
+                                className="w-2 h-2 bg-yellow-400 rounded-full"
+                              />
+                              <motion.div
+                                animate={{ opacity: [0.3, 1, 0.3] }}
+                                transition={{ duration: 1.5, repeat: Infinity, delay: 0.2 }}
+                                className="w-2 h-2 bg-yellow-400 rounded-full"
+                              />
+                              <motion.div
+                                animate={{ opacity: [0.3, 1, 0.3] }}
+                                transition={{ duration: 1.5, repeat: Infinity, delay: 0.4 }}
+                                className="w-2 h-2 bg-yellow-400 rounded-full"
+                              />
+                            </div>
+                            <p className="text-xs text-yellow-400 font-semibold">
+                              Esperando otros jugadores
+                            </p>
+                            <p className="text-xs text-dark-500">
+                              Los demás deben unirse al chat
+                            </p>
+                          </div>
+                        </motion.div>
                       )}
                     </div>
                   </div>
@@ -220,14 +268,29 @@ const VoiceChat = () => {
                       Salir
                     </Button>
                   </div>
+
+                  {/* Audio quality indicator */}
+                  {peerCount > 0 && (
+                    <div className="flex items-center justify-center gap-2 text-xs text-green-400">
+                      <div className="w-1.5 h-1.5 bg-green-400 rounded-full animate-pulse" />
+                      <span>Audio conectado con {peerCount} {peerCount === 1 ? 'persona' : 'personas'}</span>
+                    </div>
+                  )}
                 </div>
               )}
 
               {/* Tips */}
               <div className="mt-4 pt-4 border-t border-dark-700">
-                <p className="text-xs text-dark-500 text-center">
-                  💡 Tip: Usa auriculares para evitar eco
-                </p>
+                <div className="space-y-1">
+                  <p className="text-xs text-dark-500 text-center">
+                    💡 Tip: Usa auriculares para evitar eco
+                  </p>
+                  {isInVoiceChat && !isMuted && (
+                    <p className="text-xs text-dark-500 text-center">
+                      🎤 Tu micrófono está activo
+                    </p>
+                  )}
+                </div>
               </div>
             </div>
           </motion.div>

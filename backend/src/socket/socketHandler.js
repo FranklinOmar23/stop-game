@@ -8,46 +8,108 @@ export const setupSocketHandlers = (io) => {
   io.on('connection', (socket) => {
     console.log(`✅ User connected: ${socket.id}`.green);
 
-     // ==================== WEBRTC SIGNALING ====================
+// ==================== WEBRTC SIGNALING (MEJORADO) ====================
+
+// Almacenar peer IDs por sala
+const voiceChatPeers = new Map(); // roomCode -> Map(socketId -> peerId)
+
+socket.on('webrtc:join-voice', ({ roomCode, peerId }) => {
+  try {
+    const room = roomService.getRoom(roomCode);
+    if (!room) return;
+
+    const player = room.getPlayer(socket.id);
+    if (!player) return;
+
+    // Inicializar Map de peers para esta sala si no existe
+    if (!voiceChatPeers.has(roomCode)) {
+      voiceChatPeers.set(roomCode, new Map());
+    }
+
+    const roomPeers = voiceChatPeers.get(roomCode);
+
+    // Obtener lista de peers actuales (antes de agregar el nuevo)
+    const existingPeers = Array.from(roomPeers.entries()).map(([socketId, peerId]) => {
+      const p = room.getPlayer(socketId);
+      return {
+        peerId,
+        socketId,
+        peerName: p?.name || 'Jugador'
+      };
+    });
+
+    // Agregar el nuevo peer
+    roomPeers.set(socket.id, peerId);
+
+     console.log(`🎤 ${player.name} joined voice (Peer: ${peerId})`.cyan);
+    console.log(`   Socket ID: ${socket.id}`.gray);
+    console.log(`   Total peers in room before: ${existingPeers.length}`.gray);
+    console.log(`   Total peers in room after: ${roomPeers.size}`.gray);
     
-    // Cuando un jugador quiere iniciar conexión P2P
-    socket.on('webrtc:signal', ({ to, signal, from }) => {
-      console.log(`📡 WebRTC signal from ${from} to ${to}`.cyan);
-      io.to(to).emit('webrtc:signal', {
-        from,
-        signal
+    // Log de peers existentes
+    if (existingPeers.length > 0) {
+      console.log(`   Existing peers:`.yellow);
+      existingPeers.forEach(p => {
+        console.log(`     - ${p.peerName}: ${p.peerId}`.yellow);
       });
+    }
+
+    // 1. Enviar al nuevo jugador la lista de peers existentes
+    console.log(`   📤 Sending existing peers to ${player.name}`.cyan);
+    socket.emit('webrtc:existing-peers', {
+      peers: existingPeers
     });
 
-    // Solicitar conexión con todos los peers de la sala
-    socket.on('webrtc:join-voice', ({ roomCode }) => {
-      try {
-        const room = roomService.getRoom(roomCode);
-        if (!room) return;
+    // 2. Notificar a los demás sobre el nuevo peer
+    console.log(`   📢 Broadcasting new peer to room: ${roomCode}`.cyan);
+    socket.to(roomCode).emit('webrtc:peer-joined', {
+      peerId,
+      peerName: player.name,
+      socketId: socket.id
+    });
 
-        const player = room.getPlayer(socket.id);
-        if (!player) return;
+  } catch (error) {
+    console.error('Error joining voice:', error.message);
+  }
+});
 
-        // Notificar a todos en la sala que este jugador quiere unirse a voz
-        socket.to(roomCode).emit('webrtc:peer-joined', {
-          peerId: socket.id,
-          peerName: player.name
-        });
+socket.on('webrtc:leave-voice', ({ roomCode }) => {
+  if (voiceChatPeers.has(roomCode)) {
+    const roomPeers = voiceChatPeers.get(roomCode);
+    const peerId = roomPeers.get(socket.id);
+    
+    roomPeers.delete(socket.id);
+    
+    console.log(`🔇 Peer ${socket.id} left voice chat`.gray);
+    
+    // Limpiar Map si está vacío
+    if (roomPeers.size === 0) {
+      voiceChatPeers.delete(roomCode);
+    }
+  }
 
-        console.log(`🎤 ${player.name} joined voice chat in room ${roomCode}`.cyan);
+  socket.to(roomCode).emit('webrtc:peer-left', {
+    socketId: socket.id
+  });
+});
 
-      } catch (error) {
-        console.error('Error joining voice:', error.message);
+// Limpiar peers cuando un jugador se desconecta
+socket.on('disconnect', () => {
+  // Buscar y limpiar peer de todas las salas
+  voiceChatPeers.forEach((roomPeers, roomCode) => {
+    if (roomPeers.has(socket.id)) {
+      roomPeers.delete(socket.id);
+      
+      io.to(roomCode).emit('webrtc:peer-left', {
+        socketId: socket.id
+      });
+
+      if (roomPeers.size === 0) {
+        voiceChatPeers.delete(roomCode);
       }
-    });
-
-    // Notificar cuando un jugador sale del chat de voz
-    socket.on('webrtc:leave-voice', ({ roomCode }) => {
-      socket.to(roomCode).emit('webrtc:peer-left', {
-        peerId: socket.id
-      });
-    });
-
+    }
+  });
+});
 
     // ==================== CREAR SALA ====================
     socket.on(CLIENT_EVENTS.CREATE_ROOM, ({ playerName }) => {
