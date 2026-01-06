@@ -16,19 +16,16 @@ import GameBoard from './components/Game/GameBoard';
 import DiscussionPhase from './components/Results/DiscussionPhase';
 import RoundResults from './components/Results/RoundResults';
 import FinalResults from './components/Results/FinalResults';
+import ReconnectingOverlay from './components/shared/ReconnectingOverlay';
 
 import './styles/index.css';
 
 const AppContent = () => {
   const { state } = useGameContext();
 
-  // Mostrar loader mientras conecta
-  if (!state.connected) {
-    return (
-      <div className="min-h-screen flex items-center justify-center">
-        <Loader size="lg" text="Conectando al servidor..." />
-      </div>
-    );
+  // Mostrar overlay de reconexión
+  if (state.isReconnecting || !state.connected) {
+    return <ReconnectingOverlay isReconnecting={state.isReconnecting} isConnected={state.connected} />;
   }
 
   // Renderizar según el estado del juego

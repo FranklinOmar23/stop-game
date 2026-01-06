@@ -78,69 +78,66 @@ const Home = () => {
 
         {/* Opciones */}
         <div className="grid md:grid-cols-2 gap-6">
-          {/* Crear Sala */}
-          <motion.div
-            initial={{ opacity: 0, x: -20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.5 }}
-          >
-            <Card className="h-full hover:border-primary-500/50 transition-all duration-300 cursor-pointer group">
-              <div className="text-center p-6">
-                <motion.div
-                  whileHover={{ scale: 1.1, rotate: 5 }}
-                  className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-glow transition-shadow"
-                >
-                  <Plus className="w-10 h-10 text-white" />
-                </motion.div>
+  {/* Crear Sala */}
+  <motion.div
+    initial={{ opacity: 0, x: -20 }}
+    animate={{ opacity: 1, x: 0 }}
+    transition={{ delay: 0.5 }}
+    whileHover={{ y: -5 }}
+    whileTap={{ scale: 0.98 }}
+  >
+    <Card 
+      onClick={() => setMode('create')}
+      className="h-full hover:border-primary-500 hover:shadow-2xl hover:shadow-primary-500/20 transition-all duration-300 cursor-pointer group"
+    >
+      <div className="text-center p-8">
+        <motion.div
+          whileHover={{ scale: 1.1, rotate: 5 }}
+          className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-glow transition-shadow"
+        >
+          <Plus className="w-10 h-10 text-white" />
+        </motion.div>
 
-                <h2 className="text-2xl font-bold mb-2">Crear Sala</h2>
-                <p className="text-dark-400 mb-6">
-                  Inicia una nueva partida y comparte el código con tus amigos
-                </p>
+        <h2 className="text-2xl font-bold mb-2 group-hover:text-primary-400 transition-colors">
+          Crear Sala
+        </h2>
+        <p className="text-dark-400 group-hover:text-dark-300 transition-colors">
+          Inicia una nueva partida y comparte el código con tus amigos
+        </p>
+      </div>
+    </Card>
+  </motion.div>
 
-                <Button
-                  onClick={() => setMode('create')}
-                  className="w-full"
-                  icon={Plus}
-                >
-                  Crear Nueva Sala
-                </Button>
-              </div>
-            </Card>
-          </motion.div>
+  {/* Unirse a Sala */}
+  <motion.div
+    initial={{ opacity: 0, x: 20 }}
+    animate={{ opacity: 1, x: 0 }}
+    transition={{ delay: 0.6 }}
+    whileHover={{ y: -5 }}
+    whileTap={{ scale: 0.98 }}
+  >
+    <Card 
+      onClick={() => setMode('join')}
+      className="h-full hover:border-accent-500 hover:shadow-2xl hover:shadow-accent-500/20 transition-all duration-300 cursor-pointer group"
+    >
+      <div className="text-center p-8">
+        <motion.div
+          whileHover={{ scale: 1.1, rotate: -5 }}
+          className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-accent-500 to-accent-600 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-glow transition-shadow"
+        >
+          <LogIn className="w-10 h-10 text-white" />
+        </motion.div>
 
-          {/* Unirse a Sala */}
-          <motion.div
-            initial={{ opacity: 0, x: 20 }}
-            animate={{ opacity: 1, x: 0 }}
-            transition={{ delay: 0.6 }}
-          >
-            <Card className="h-full hover:border-accent-500/50 transition-all duration-300 cursor-pointer group">
-              <div className="text-center p-6">
-                <motion.div
-                  whileHover={{ scale: 1.1, rotate: -5 }}
-                  className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-accent-500 to-accent-600 rounded-2xl flex items-center justify-center shadow-lg group-hover:shadow-glow transition-shadow"
-                >
-                  <LogIn className="w-10 h-10 text-white" />
-                </motion.div>
-
-                <h2 className="text-2xl font-bold mb-2">Unirse a Sala</h2>
-                <p className="text-dark-400 mb-6">
-                  Ingresa el código de sala que te compartió tu amigo
-                </p>
-
-                <Button
-                  onClick={() => setMode('join')}
-                  variant="secondary"
-                  className="w-full"
-                  icon={LogIn}
-                >
-                  Unirse con Código
-                </Button>
-              </div>
-            </Card>
-          </motion.div>
-        </div>
+        <h2 className="text-2xl font-bold mb-2 group-hover:text-accent-400 transition-colors">
+          Unirse a Sala
+        </h2>
+        <p className="text-dark-400 group-hover:text-dark-300 transition-colors">
+          Ingresa el código de sala que te compartió tu amigo
+        </p>
+      </div>
+    </Card>
+  </motion.div>
+</div>
 
         {/* Información del juego */}
         <motion.div

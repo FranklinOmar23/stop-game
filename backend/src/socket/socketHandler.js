@@ -5,111 +5,122 @@ import { timerService } from '../services/timerService.js';
 import { CLIENT_EVENTS, SERVER_EVENTS } from './events.js';
 
 export const setupSocketHandlers = (io) => {
+  // Almacenar peer IDs por sala (fuera del scope de connection para persistir)
+  const voiceChatPeers = new Map(); // roomCode -> Map(socketId -> peerId)
+
   io.on('connection', (socket) => {
     console.log(`✅ User connected: ${socket.id}`.green);
 
-// ==================== WEBRTC SIGNALING (MEJORADO) ====================
+    // ==================== WEBRTC SIGNALING ====================
+    socket.on('webrtc:join-voice', ({ roomCode, peerId }) => {
+      try {
+        const room = roomService.getRoom(roomCode);
+        if (!room) return;
 
-// Almacenar peer IDs por sala
-const voiceChatPeers = new Map(); // roomCode -> Map(socketId -> peerId)
+        const player = room.getPlayerBySocketId(socket.id);
+        if (!player) return;
 
-socket.on('webrtc:join-voice', ({ roomCode, peerId }) => {
-  try {
-    const room = roomService.getRoom(roomCode);
-    if (!room) return;
+        if (!voiceChatPeers.has(roomCode)) {
+          voiceChatPeers.set(roomCode, new Map());
+        }
 
-    const player = room.getPlayer(socket.id);
-    if (!player) return;
+        const roomPeers = voiceChatPeers.get(roomCode);
 
-    // Inicializar Map de peers para esta sala si no existe
-    if (!voiceChatPeers.has(roomCode)) {
-      voiceChatPeers.set(roomCode, new Map());
-    }
+        const existingPeers = Array.from(roomPeers.entries()).map(([socketId, peerId]) => {
+          const p = room.getPlayerBySocketId(socketId);
+          return {
+            peerId,
+            socketId,
+            peerName: p?.name || 'Jugador'
+          };
+        });
 
-    const roomPeers = voiceChatPeers.get(roomCode);
+        roomPeers.set(socket.id, peerId);
 
-    // Obtener lista de peers actuales (antes de agregar el nuevo)
-    const existingPeers = Array.from(roomPeers.entries()).map(([socketId, peerId]) => {
-      const p = room.getPlayer(socketId);
-      return {
-        peerId,
-        socketId,
-        peerName: p?.name || 'Jugador'
-      };
-    });
+        console.log(`🎤 ${player.name} joined voice (Peer: ${peerId})`.cyan);
 
-    // Agregar el nuevo peer
-    roomPeers.set(socket.id, peerId);
+        socket.emit('webrtc:existing-peers', { peers: existingPeers });
+        socket.to(roomCode).emit('webrtc:peer-joined', {
+          peerId,
+          peerName: player.name,
+          socketId: socket.id
+        });
 
-     console.log(`🎤 ${player.name} joined voice (Peer: ${peerId})`.cyan);
-    console.log(`   Socket ID: ${socket.id}`.gray);
-    console.log(`   Total peers in room before: ${existingPeers.length}`.gray);
-    console.log(`   Total peers in room after: ${roomPeers.size}`.gray);
-    
-    // Log de peers existentes
-    if (existingPeers.length > 0) {
-      console.log(`   Existing peers:`.yellow);
-      existingPeers.forEach(p => {
-        console.log(`     - ${p.peerName}: ${p.peerId}`.yellow);
-      });
-    }
-
-    // 1. Enviar al nuevo jugador la lista de peers existentes
-    console.log(`   📤 Sending existing peers to ${player.name}`.cyan);
-    socket.emit('webrtc:existing-peers', {
-      peers: existingPeers
-    });
-
-    // 2. Notificar a los demás sobre el nuevo peer
-    console.log(`   📢 Broadcasting new peer to room: ${roomCode}`.cyan);
-    socket.to(roomCode).emit('webrtc:peer-joined', {
-      peerId,
-      peerName: player.name,
-      socketId: socket.id
-    });
-
-  } catch (error) {
-    console.error('Error joining voice:', error.message);
-  }
-});
-
-socket.on('webrtc:leave-voice', ({ roomCode }) => {
-  if (voiceChatPeers.has(roomCode)) {
-    const roomPeers = voiceChatPeers.get(roomCode);
-    const peerId = roomPeers.get(socket.id);
-    
-    roomPeers.delete(socket.id);
-    
-    console.log(`🔇 Peer ${socket.id} left voice chat`.gray);
-    
-    // Limpiar Map si está vacío
-    if (roomPeers.size === 0) {
-      voiceChatPeers.delete(roomCode);
-    }
-  }
-
-  socket.to(roomCode).emit('webrtc:peer-left', {
-    socketId: socket.id
-  });
-});
-
-// Limpiar peers cuando un jugador se desconecta
-socket.on('disconnect', () => {
-  // Buscar y limpiar peer de todas las salas
-  voiceChatPeers.forEach((roomPeers, roomCode) => {
-    if (roomPeers.has(socket.id)) {
-      roomPeers.delete(socket.id);
-      
-      io.to(roomCode).emit('webrtc:peer-left', {
-        socketId: socket.id
-      });
-
-      if (roomPeers.size === 0) {
-        voiceChatPeers.delete(roomCode);
+      } catch (error) {
+        console.error('Error joining voice:', error.message);
       }
-    }
-  });
-});
+    });
+
+    socket.on('webrtc:leave-voice', ({ roomCode }) => {
+      if (voiceChatPeers.has(roomCode)) {
+        const roomPeers = voiceChatPeers.get(roomCode);
+        roomPeers.delete(socket.id);
+
+        if (roomPeers.size === 0) {
+          voiceChatPeers.delete(roomCode);
+        }
+      }
+
+      socket.to(roomCode).emit('webrtc:peer-left', { socketId: socket.id });
+    });
+
+    // ==================== RECONEXIÓN ====================
+    socket.on('rejoin_room', ({ roomCode, playerId, playerName }) => {
+      try {
+        console.log(`🔄 ${playerName} intentando reconectar a ${roomCode}`.cyan);
+        console.log(`   Player ID: ${playerId}`.gray);
+        console.log(`   New Socket ID: ${socket.id}`.gray);
+
+        const room = roomService.getRoom(roomCode);
+
+        if (!room) {
+          console.log(`❌ Sala ${roomCode} no encontrada`.red);
+          socket.emit('room_not_found');
+          return;
+        }
+
+        const existingPlayer = room.getPlayer(playerId);
+
+        if (existingPlayer) {
+          const oldSocketId = existingPlayer.socketId;
+          existingPlayer.socketId = socket.id;
+
+          roomService.cancelExpirationTimer(roomCode);
+          socket.join(roomCode);
+
+          console.log(`✅ ${playerName} reconectado a ${roomCode}`.green);
+          console.log(`   Old Socket ID: ${oldSocketId}`.gray);
+
+          socket.emit('reconnected', {
+            roomCode,
+            player: existingPlayer.toJSON(),
+            room: {
+              code: roomCode,
+              players: room.getAllPlayers().map(p => p.toJSON()),
+              host: room.host,
+              gameState: room.gameState,
+              currentRound: room.currentRound,
+              currentLetter: room.currentLetter,
+            }
+          });
+
+          socket.to(roomCode).emit('player_reconnected', {
+            playerId,
+            playerName,
+          });
+
+          room.updateActivity();
+
+        } else {
+          console.log(`⚠️ Jugador ${playerId} no encontrado`.yellow);
+          socket.emit('room_not_found');
+        }
+
+      } catch (error) {
+        console.error('❌ Error en rejoin_room:', error);
+        socket.emit('error', { message: 'Error al reconectar a la sala' });
+      }
+    });
 
     // ==================== CREAR SALA ====================
     socket.on(CLIENT_EVENTS.CREATE_ROOM, ({ playerName }) => {
@@ -130,9 +141,7 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error creating room: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
@@ -159,9 +168,7 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error joining room: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
@@ -174,7 +181,13 @@ socket.on('disconnect', () => {
           throw new Error('Sala no encontrada');
         }
 
-        if (room.host !== socket.id) {
+        const player = room.getPlayerBySocketId(socket.id);
+
+        if (!player) {
+          throw new Error('Jugador no encontrado');
+        }
+
+        if (room.host !== player.id) {
           throw new Error('Solo el host puede iniciar el juego');
         }
 
@@ -193,9 +206,7 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error starting game: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
@@ -208,8 +219,13 @@ socket.on('disconnect', () => {
           throw new Error('Sala no encontrada');
         }
 
-        const selectedLetter = gameService.selectLetter(room, socket.id, letter);
-        const player = room.getPlayer(socket.id);
+        const player = room.getPlayerBySocketId(socket.id);
+
+        if (!player) {
+          throw new Error('Jugador no encontrado');
+        }
+
+        const selectedLetter = gameService.selectLetter(room, player.id, letter);
 
         io.to(room.code).emit(SERVER_EVENTS.LETTER_SELECTED, {
           letter: selectedLetter,
@@ -223,19 +239,17 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error selecting letter: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
-    // ==================== ACTUALIZAR RESPUESTA EN TIEMPO REAL ====================
+    // ==================== ACTUALIZAR RESPUESTA ====================
     socket.on('update_current_answer', ({ roomCode, category, value }) => {
       try {
         const room = roomService.getRoom(roomCode);
         if (!room) return;
 
-        const player = room.getPlayer(socket.id);
+        const player = room.getPlayerBySocketId(socket.id);
         if (!player) return;
 
         player.updateCurrentAnswer(category, value);
@@ -258,7 +272,7 @@ socket.on('disconnect', () => {
           throw new Error('El countdown ya está activo');
         }
 
-        const player = room.getPlayer(socket.id);
+        const player = room.getPlayerBySocketId(socket.id);
 
         if (!player) {
           throw new Error('Jugador no encontrado');
@@ -272,7 +286,7 @@ socket.on('disconnect', () => {
           throw new Error('Debes llenar al menos una categoría antes de presionar STOP');
         }
 
-        timerService.startCountdown(room, io, socket.id);
+        timerService.startCountdown(room, io, player.id);
 
         io.to(room.code).emit(SERVER_EVENTS.ROOM_UPDATED, {
           room: roomService.getRoomData(room)
@@ -280,9 +294,7 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error pressing stop: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
@@ -295,11 +307,16 @@ socket.on('disconnect', () => {
           throw new Error('Sala no encontrada');
         }
 
-        const allSubmitted = gameService.submitAnswers(room, socket.id, answers);
-        const player = room.getPlayer(socket.id);
+        const player = room.getPlayerBySocketId(socket.id);
+
+        if (!player) {
+          throw new Error('Jugador no encontrado');
+        }
+
+        const allSubmitted = gameService.submitAnswers(room, player.id, answers);
 
         io.to(room.code).emit(SERVER_EVENTS.PLAYER_SUBMITTED, {
-          playerId: socket.id,
+          playerId: player.id,
           playerName: player.name
         });
 
@@ -308,7 +325,6 @@ socket.on('disconnect', () => {
         });
 
         if (allSubmitted && !room.countdownActive) {
-          // *** Inicializar sistema de validaciones ***
           room.initializeValidations();
 
           io.to(room.code).emit(SERVER_EVENTS.START_DISCUSSION, {
@@ -318,13 +334,11 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error submitting answers: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
-    // ==================== VOTAR EN RESPUESTA (NUEVO) ====================
+    // ==================== VOTAR EN RESPUESTA ====================
     socket.on('vote_on_answer', ({ roomCode, playerId, category, vote }) => {
       try {
         const room = roomService.getRoom(roomCode);
@@ -337,27 +351,24 @@ socket.on('disconnect', () => {
           throw new Error('Solo puedes votar durante la fase de discusión');
         }
 
-        const voter = room.getPlayer(socket.id);
-        
+        const voter = room.getPlayerBySocketId(socket.id);
+
         if (!voter) {
           throw new Error('Jugador no encontrado');
         }
 
-        if (playerId === socket.id) {
+        if (playerId === voter.id) {
           throw new Error('No puedes votar por tus propias respuestas');
         }
 
-        // Registrar voto
-        room.voteOnAnswer(playerId, category, socket.id, vote);
+        room.voteOnAnswer(playerId, category, voter.id, vote);
 
-        // Obtener estadísticas actualizadas
         const stats = room.getValidationStats(playerId, category);
 
-        // Notificar a todos
         io.to(room.code).emit('answer_vote_updated', {
           playerId,
           category,
-          voterId: socket.id,
+          voterId: voter.id,
           voterName: voter.name,
           vote,
           stats
@@ -367,21 +378,17 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error voting on answer: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
-    // ==================== OBTENER ESTADÍSTICAS DE VALIDACIÓN (NUEVO) ====================
+    // ==================== OBTENER ESTADÍSTICAS ====================
     socket.on('get_validation_stats', ({ roomCode }) => {
       try {
         const room = roomService.getRoom(roomCode);
-        
         if (!room) return;
 
         const allStats = room.getAllValidationStats();
-
         socket.emit('validation_stats', { stats: allStats });
 
       } catch (error) {
@@ -398,7 +405,13 @@ socket.on('disconnect', () => {
           throw new Error('Sala no encontrada');
         }
 
-        if (room.host !== socket.id) {
+        const player = room.getPlayerBySocketId(socket.id);
+
+        if (!player) {
+          throw new Error('Jugador no encontrado');
+        }
+
+        if (room.host !== player.id) {
           throw new Error('Solo el host puede calcular resultados');
         }
 
@@ -418,9 +431,7 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error calculating results: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
@@ -433,7 +444,13 @@ socket.on('disconnect', () => {
           throw new Error('Sala no encontrada');
         }
 
-        if (room.host !== socket.id) {
+        const player = room.getPlayerBySocketId(socket.id);
+
+        if (!player) {
+          throw new Error('Jugador no encontrado');
+        }
+
+        if (room.host !== player.id) {
           throw new Error('Solo el host puede avanzar a la siguiente ronda');
         }
 
@@ -458,9 +475,7 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error next round: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
@@ -473,7 +488,13 @@ socket.on('disconnect', () => {
           throw new Error('Sala no encontrada');
         }
 
-        if (room.host !== socket.id) {
+        const player = room.getPlayerBySocketId(socket.id);
+
+        if (!player) {
+          throw new Error('Jugador no encontrado');
+        }
+
+        if (room.host !== player.id) {
           throw new Error('Solo el host puede reiniciar el juego');
         }
 
@@ -489,29 +510,51 @@ socket.on('disconnect', () => {
 
       } catch (error) {
         console.error(`❌ Error restarting game: ${error.message}`.red);
-        socket.emit(SERVER_EVENTS.ERROR, {
-          message: error.message
-        });
+        socket.emit(SERVER_EVENTS.ERROR, { message: error.message });
       }
     });
 
     // ==================== SALIR DE LA SALA ====================
     socket.on(CLIENT_EVENTS.LEAVE_ROOM, ({ roomCode }) => {
-      handlePlayerLeave(socket.id, roomCode);
+      const room = roomService.getRoom(roomCode);
+      if (!room) return;
+
+      const player = room.getPlayerBySocketId(socket.id);
+      if (player) {
+        handlePlayerLeave(player.id, roomCode);
+      }
     });
 
     // ==================== DISCONNECT ====================
     socket.on('disconnect', () => {
       console.log(`❌ User disconnected: ${socket.id}`.red);
 
-      const room = roomService.getRoomByPlayerId(socket.id);
+      const room = roomService.getRoomBySocketId(socket.id);
 
       if (room) {
-        handlePlayerLeave(socket.id, room.code);
+        const player = room.getPlayerBySocketId(socket.id);
+        if (player) {
+          console.log(`📴 ${player.name} desconectado de sala ${room.code} (esperando reconexión...)`.yellow);
+        }
       }
+
+      // Limpiar peers de voice chat
+      voiceChatPeers.forEach((roomPeers, roomCode) => {
+        if (roomPeers.has(socket.id)) {
+          roomPeers.delete(socket.id);
+
+          io.to(roomCode).emit('webrtc:peer-left', {
+            socketId: socket.id
+          });
+
+          if (roomPeers.size === 0) {
+            voiceChatPeers.delete(roomCode);
+          }
+        }
+      });
     });
 
-    // ==================== FUNCIÓN AUXILIAR: MANEJAR SALIDA ====================
+    // ==================== FUNCIÓN AUXILIAR ====================
     function handlePlayerLeave(playerId, roomCode) {
       try {
         const room = roomService.getRoom(roomCode);
@@ -558,16 +601,13 @@ socket.on('disconnect', () => {
     }
   });
 
+  // ==================== ESTADÍSTICAS PERIÓDICAS ====================
   setInterval(() => {
-    const roomCount = roomService.getRoomCount();
-    let totalPlayers = 0;
-
-    roomService.getAllRooms().forEach(room => {
-      totalPlayers += room.playerCount;
-    });
-
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'.gray);
-    console.log(`📊 Stats: ${roomCount} rooms, ${totalPlayers} players`.cyan);
-    console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'.gray);
+    const stats = roomService.getStats();
+    if (stats.totalRooms > 0) {
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'.gray);
+      console.log(`📊 ${stats.activeRooms} salas activas | ${stats.totalPlayers} jugadores`.cyan);
+      console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━'.gray);
+    }
   }, 5 * 60 * 1000);
 };

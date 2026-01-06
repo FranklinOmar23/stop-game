@@ -29,35 +29,44 @@ const StopButton = () => {
   return (
     <motion.button
       onClick={handlePress}
-      whileHover={{ scale: 1.05 }}
-      whileTap={{ scale: 0.95 }}
+      whileHover={{ scale: 1.03 }}
+      whileTap={{ scale: 0.97 }}
       className="relative group"
     >
-      {/* Glow effect */}
+      {/* Glow effect - Más suave */}
       <motion.div
         animate={{
-          boxShadow: [
-            '0 0 20px rgba(239, 68, 68, 0.5)',
-            '0 0 40px rgba(239, 68, 68, 0.8)',
-            '0 0 20px rgba(239, 68, 68, 0.5)',
-          ],
+          opacity: [0.3, 0.5, 0.3],
         }}
-        transition={{ duration: 2, repeat: Infinity }}
-        className="absolute inset-0 bg-gradient-to-r from-primary-600 to-red-600 rounded-2xl blur-xl opacity-50"
+        transition={{ 
+          duration: 3, 
+          repeat: Infinity,
+          ease: "easeInOut"
+        }}
+        className="absolute inset-0 bg-gradient-to-r from-primary-600 to-red-600 rounded-2xl blur-xl"
       />
 
       {/* Button */}
       <div className="relative bg-gradient-to-r from-primary-600 to-red-600 rounded-2xl px-12 py-6 shadow-2xl">
         <div className="flex items-center gap-4">
+          {/* Icono de mano - Animación suave */}
           <motion.div
-            animate={{ rotate: [0, 10, -10, 0] }}
-            transition={{ duration: 0.5, repeat: Infinity, repeatDelay: 1 }}
+            animate={{ 
+              rotate: [0, 5, -5, 0],
+              scale: [1, 1.05, 1]
+            }}
+            transition={{ 
+              duration: 2,
+              repeat: Infinity,
+              ease: "easeInOut"
+            }}
           >
             <Hand className="w-8 h-8 text-white" />
           </motion.div>
 
           <div className="text-left">
             <div className="flex items-center gap-2 mb-1">
+              {/* Icono de rayo - Sin animación */}
               <Zap className="w-5 h-5 text-yellow-300" />
               <span className="text-3xl font-black text-white tracking-wider">
                 STOP
@@ -69,28 +78,21 @@ const StopButton = () => {
           </div>
         </div>
 
-        {/* Pulse effect */}
+        {/* Pulse effect - Más sutil */}
         <motion.div
           animate={{
-            scale: [1, 1.1, 1],
-            opacity: [0.5, 0.8, 0.5],
+            opacity: [0.05, 0.15, 0.05],
           }}
-          transition={{ duration: 2, repeat: Infinity }}
-          className="absolute inset-0 bg-white rounded-2xl opacity-10"
+          transition={{ 
+            duration: 3, 
+            repeat: Infinity,
+            ease: "easeInOut"
+          }}
+          className="absolute inset-0 bg-white rounded-2xl"
         />
       </div>
 
-      {/* Particles */}
-      <motion.div
-        animate={{
-          y: [-20, 0],
-          opacity: [0, 1, 0],
-        }}
-        transition={{ duration: 2, repeat: Infinity }}
-        className="absolute -top-8 left-1/2 -translate-x-1/2"
-      >
-        <Zap className="w-6 h-6 text-yellow-400" />
-      </motion.div>
+      {/* Particles - Eliminado (demasiado ruido) */}
     </motion.button>
   );
 };

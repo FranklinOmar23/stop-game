@@ -13,11 +13,11 @@ export class Room {
     this.roundScores = [];
     this.countdownActive = false;
     this.countdownInterval = null;
-    
+
     // *** Sistema de validación de respuestas ***
     this.answerValidations = new Map(); // key: "playerId-category" -> { approved: Set, rejected: Set }
     this.invalidatedAnswers = new Set(); // Set de "playerId-category" que fueron rechazadas
-    
+
     this.createdAt = Date.now();
     this.lastActivity = Date.now();
   }
@@ -30,7 +30,7 @@ export class Room {
   removePlayer(playerId) {
     this.players.delete(playerId);
     this.updateActivity();
-    
+
     // Si el host se va, asignar nuevo host
     if (this.host === playerId && this.players.size > 0) {
       this.host = Array.from(this.players.keys())[0];
@@ -50,19 +50,19 @@ export class Room {
   }
 
   canStartGame() {
-    return this.players.size >= GAME_CONFIG.MIN_PLAYERS && 
-           this.gameState === GAME_STATES.LOBBY;
+    return this.players.size >= GAME_CONFIG.MIN_PLAYERS &&
+      this.gameState === GAME_STATES.LOBBY;
   }
 
   resetForNewRound() {
     this.currentAnswers.clear();
     this.currentLetter = null;
     this.countdownActive = false;
-    
+
     // Limpiar validaciones
     this.answerValidations.clear();
     this.invalidatedAnswers.clear();
-    
+
     this.players.forEach(player => {
       player.reset();
     });
@@ -91,7 +91,7 @@ export class Room {
   initializeValidations() {
     this.answerValidations.clear();
     this.invalidatedAnswers.clear();
-    
+
     // Inicializar validaciones para cada respuesta
     this.currentAnswers.forEach((answers, playerId) => {
       Object.keys(answers).forEach(category => {
@@ -115,7 +115,7 @@ export class Room {
    */
   voteOnAnswer(playerId, category, voterId, vote) {
     const key = this.getValidationKey(playerId, category);
-    
+
     // Crear validación si no existe
     if (!this.answerValidations.has(key)) {
       this.answerValidations.set(key, {
@@ -123,13 +123,13 @@ export class Room {
         rejected: new Set()
       });
     }
-    
+
     const validation = this.answerValidations.get(key);
-    
+
     // Remover voto anterior del mismo votante
     validation.approved.delete(voterId);
     validation.rejected.delete(voterId);
-    
+
     // Agregar nuevo voto
     if (vote === 'approve') {
       validation.approved.add(voterId);
@@ -137,10 +137,10 @@ export class Room {
       validation.rejected.add(voterId);
     }
     // Si vote es null, solo se remueve el voto anterior
-    
+
     // Verificar si se debe invalidar
     this.checkIfInvalidated(playerId, category);
-    
+
     return validation;
   }
 
@@ -150,22 +150,22 @@ export class Room {
   checkIfInvalidated(playerId, category) {
     const key = this.getValidationKey(playerId, category);
     const validation = this.answerValidations.get(key);
-    
+
     if (!validation) return false;
-    
+
     const totalVoters = this.players.size - 1; // Excluir al dueño de la respuesta
     const rejectedCount = validation.rejected.size;
     const approvedCount = validation.approved.size;
-    
+
     // Mayoría simple: más de la mitad de los votantes posibles
     const majorityThreshold = Math.floor(totalVoters / 2);
-    
+
     const wasInvalidated = this.invalidatedAnswers.has(key);
-    
+
     if (rejectedCount > majorityThreshold) {
       // Marcar como invalidada
       this.invalidatedAnswers.add(key);
-      
+
       if (!wasInvalidated) {
         console.log(`❌ Answer INVALIDATED: ${playerId} - ${category} (${rejectedCount} rejects)`.red);
       }
@@ -173,7 +173,7 @@ export class Room {
     } else {
       // Remover invalidación si tenía
       this.invalidatedAnswers.delete(key);
-      
+
       if (wasInvalidated) {
         console.log(`✅ Answer VALIDATED: ${playerId} - ${category} (${approvedCount} approves)`.green);
       }
@@ -195,17 +195,17 @@ export class Room {
   getValidationStats(playerId, category) {
     const key = this.getValidationKey(playerId, category);
     const validation = this.answerValidations.get(key);
-    
+
     if (!validation) {
-      return { 
-        approved: 0, 
-        rejected: 0, 
+      return {
+        approved: 0,
+        rejected: 0,
         isInvalidated: false,
         approvedBy: [],
         rejectedBy: []
       };
     }
-    
+
     return {
       approved: validation.approved.size,
       rejected: validation.rejected.size,
@@ -214,21 +214,37 @@ export class Room {
       rejectedBy: Array.from(validation.rejected)
     };
   }
+  getPlayerBySocketId(socketId) {
+    for (const player of this.players.values()) {
+      if (player.socketId === socketId) {
+        return player;
+      }
+    }
+    return null;
+  }
+  updatePlayerSocketId(playerId, newSocketId) {
+    const player = this.players.get(playerId);
+    if (player) {
+      player.socketId = newSocketId;
+      return true;
+    }
+    return false;
+  }
 
   /**
    * Obtiene todas las estadísticas de validación de la sala
    */
   getAllValidationStats() {
     const allStats = {};
-    
+
     this.currentAnswers.forEach((answers, playerId) => {
       allStats[playerId] = {};
-      
+
       Object.keys(answers).forEach(category => {
         allStats[playerId][category] = this.getValidationStats(playerId, category);
       });
     });
-    
+
     return allStats;
   }
 
@@ -237,12 +253,12 @@ export class Room {
    */
   getInvalidatedCountByPlayer() {
     const counts = {};
-    
+
     this.invalidatedAnswers.forEach(key => {
       const [playerId] = key.split('-');
       counts[playerId] = (counts[playerId] || 0) + 1;
     });
-    
+
     return counts;
   }
 
