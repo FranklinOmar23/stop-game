@@ -283,6 +283,9 @@ const VoiceChat = () => {
               <div className="mt-4 pt-4 border-t border-dark-700">
                 <div className="space-y-1">
                   <p className="text-xs text-dark-500 text-center">
+                    👷‍♂️ Funcion Beta aun en desarrollo..
+                  </p>
+                  <p className="text-xs text-dark-500 text-center">
                     💡 Tip: Usa auriculares para evitar eco
                   </p>
                   {isInVoiceChat && !isMuted && (
