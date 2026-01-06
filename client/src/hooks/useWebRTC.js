@@ -13,19 +13,45 @@ export const useWebRTC = (roomCode, playerName) => {
   const localStreamRef = useRef(null);
   const peerRef = useRef(null);
   const callsRef = useRef({});
-  const audioElementsRef = useRef({}); // ← NUEVO: Referencias a elementos de audio
+  const audioElementsRef = useRef({});
   const retryTimeoutsRef = useRef({});
 
-  // Inicializar PeerJS
+  // Inicializar PeerJS con STUN/TURN
   useEffect(() => {
     const peer = new Peer({
       config: {
         iceServers: [
+          // Servidores STUN de Google (gratis)
           { urls: 'stun:stun.l.google.com:19302' },
           { urls: 'stun:stun1.l.google.com:19302' },
           { urls: 'stun:stun2.l.google.com:19302' },
-        ]
-      }
+          { urls: 'stun:stun3.l.google.com:19302' },
+          { urls: 'stun:stun4.l.google.com:19302' },
+          
+          // Servidor STUN de Twilio (gratis)
+          { urls: 'stun:global.stun.twilio.com:3478' },
+          
+          // Servidores TURN de OpenRelay (gratis con límites)
+          {
+            urls: 'turn:openrelay.metered.ca:80',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          },
+          {
+            urls: 'turn:openrelay.metered.ca:443?transport=tcp',
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
+        ],
+        iceTransportPolicy: 'all', // Usar ICE, STUN y TURN
+        iceCandidatePoolSize: 10
+      },
+      debug: 2 // Nivel de logging (0-3)
     });
 
     peer.on('open', (id) => {
@@ -36,6 +62,22 @@ export const useWebRTC = (roomCode, playerName) => {
 
     peer.on('call', (call) => {
       console.log('📞 Receiving call from:', call.peer);
+      
+      // Logging de conexión ICE
+      call.peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('🧊 ICE Candidate Type:', event.candidate.type);
+        }
+      };
+
+      call.peerConnection.oniceconnectionstatechange = () => {
+        const state = call.peerConnection.iceConnectionState;
+        console.log('🔌 ICE Connection State:', state);
+        
+        if (state === 'failed' || state === 'disconnected') {
+          console.warn('⚠️ ICE connection issue with:', call.peer);
+        }
+      };
       
       if (localStreamRef.current) {
         call.answer(localStreamRef.current);
@@ -50,18 +92,43 @@ export const useWebRTC = (roomCode, playerName) => {
           removePeer(call.peer);
         });
 
+        call.on('error', (err) => {
+          console.error('❌ Call error:', err);
+        });
+
         callsRef.current[call.peer] = call;
       }
     });
 
     peer.on('error', (err) => {
       console.error('❌ PeerJS error:', err);
-      if (err.type !== 'peer-unavailable') {
+      
+      if (err.type === 'peer-unavailable') {
+        console.log('⚠️ Peer no disponible, reintentando...');
+      } else if (err.type === 'network') {
+        setError('Error de red - verifica tu conexión');
+      } else if (err.type === 'disconnected') {
+        console.log('📴 Desconectado, intentando reconectar...');
+      } else {
         setError('Error de conexión P2P');
       }
     });
 
+    peer.on('disconnected', () => {
+      console.log('📴 Peer desconectado');
+      
+      if (!peer.destroyed) {
+        console.log('🔄 Intentando reconectar peer...');
+        peer.reconnect();
+      }
+    });
+
+    peer.on('close', () => {
+      console.log('❌ Peer cerrado');
+    });
+
     return () => {
+      console.log('🧹 Cleaning up peer');
       peer.destroy();
       Object.values(retryTimeoutsRef.current).forEach(timeout => clearTimeout(timeout));
     };
@@ -93,7 +160,8 @@ export const useWebRTC = (roomCode, playerName) => {
         console.log('🎤 Audio track:', {
           enabled: audioTrack.enabled,
           muted: audioTrack.muted,
-          readyState: audioTrack.readyState
+          readyState: audioTrack.readyState,
+          label: audioTrack.label
         });
       }
       
@@ -113,7 +181,7 @@ export const useWebRTC = (roomCode, playerName) => {
     }
   }, []);
 
-  // Manejar stream remoto - CORREGIDO
+  // Manejar stream remoto
   const handleRemoteStream = useCallback((peerId, stream, peerName = 'Jugador') => {
     console.log('🔊 Setting up remote stream for:', peerId, peerName);
     
@@ -130,8 +198,19 @@ export const useWebRTC = (roomCode, playerName) => {
     const audio = new Audio();
     audio.srcObject = stream;
     audio.autoplay = true;
-    audio.playsInline = true; // Importante para iOS
+    audio.playsInline = true;
     audio.volume = 1.0;
+
+    // Logging de audio tracks
+    const audioTracks = stream.getAudioTracks();
+    console.log('🎧 Remote audio tracks:', audioTracks.length);
+    audioTracks.forEach(track => {
+      console.log('  Track:', {
+        enabled: track.enabled,
+        muted: track.muted,
+        readyState: track.readyState
+      });
+    });
 
     // Intentar reproducir
     const playPromise = audio.play();
@@ -142,7 +221,7 @@ export const useWebRTC = (roomCode, playerName) => {
           console.log('✅ Audio playing for:', peerName);
         })
         .catch(error => {
-          console.warn('⚠️ Autoplay blocked for:', peerName);
+          console.warn('⚠️ Autoplay blocked for:', peerName, error);
           
           // Guardar para reproducir con interacción del usuario
           if (!window.pendingAudioStreams) {
@@ -162,12 +241,12 @@ export const useWebRTC = (roomCode, playerName) => {
         stream,
         name: peerName,
         isMuted: false,
-        audio // Pasar referencia para control de volumen
+        audio
       }
     }));
   }, []);
 
-  // Remover peer - MEJORADO
+  // Remover peer
   const removePeer = useCallback((peerId) => {
     console.log('❌ Removing peer:', peerId);
     
@@ -204,7 +283,7 @@ export const useWebRTC = (roomCode, playerName) => {
     });
   }, []);
 
-  // Llamar a un peer con reintentos - MEJORADO
+  // Llamar a un peer con reintentos
   const callPeer = useCallback((peerId, peerName, retryCount = 0) => {
     const MAX_RETRIES = 3;
     const RETRY_DELAY = 3000;
@@ -219,7 +298,7 @@ export const useWebRTC = (roomCode, playerName) => {
       return;
     }
 
-    console.log(`📞 Calling peer (${retryCount + 1}/${MAX_RETRIES}):`, peerName);
+    console.log(`📞 Calling peer (${retryCount + 1}/${MAX_RETRIES}):`, peerName, peerId);
     
     try {
       const call = peerRef.current.call(peerId, localStreamRef.current);
@@ -228,6 +307,24 @@ export const useWebRTC = (roomCode, playerName) => {
         console.error('❌ Failed to create call');
         return;
       }
+
+      // Logging de ICE
+      call.peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          console.log('🧊 Outgoing ICE Candidate:', event.candidate.type);
+        }
+      };
+
+      call.peerConnection.oniceconnectionstatechange = () => {
+        const state = call.peerConnection.iceConnectionState;
+        console.log('🔌 Outgoing ICE State:', state);
+        
+        if (state === 'connected') {
+          console.log('✅ ICE connection established with:', peerName);
+        } else if (state === 'failed') {
+          console.error('❌ ICE connection failed with:', peerName);
+        }
+      };
 
       let hasReceivedStream = false;
       let streamTimeout;
@@ -266,15 +363,17 @@ export const useWebRTC = (roomCode, playerName) => {
 
       callsRef.current[peerId] = call;
 
-      // Timeout: si no hay stream en 8 segundos, reintentar
+      // Timeout: si no hay stream en 10 segundos, reintentar
       streamTimeout = setTimeout(() => {
         if (!hasReceivedStream && retryCount < MAX_RETRIES) {
           console.log(`⏰ Timeout for ${peerName}, retrying...`);
           call.close();
           delete callsRef.current[peerId];
           callPeer(peerId, peerName, retryCount + 1);
+        } else if (!hasReceivedStream) {
+          console.error('❌ Max retries reached for:', peerName);
         }
-      }, 8000);
+      }, 10000);
 
     } catch (err) {
       console.error('❌ Exception calling peer:', err);
@@ -313,7 +412,7 @@ export const useWebRTC = (roomCode, playerName) => {
     }
   }, [roomCode, myPeerId, emit, getLocalStream]);
 
-  // Salir del chat de voz - MEJORADO
+  // Salir del chat de voz
   const leaveVoiceChat = useCallback(() => {
     console.log('🔇 Leaving voice chat');
     
@@ -384,7 +483,7 @@ export const useWebRTC = (roomCode, playerName) => {
     };
 
     const handlePeerJoined = ({ peerId, peerName }) => {
-      console.log('👤 Peer joined:', peerName);
+      console.log('👤 Peer joined:', peerName, peerId);
       
       if (peerId !== myPeerId && localStreamRef.current) {
         setTimeout(() => {
@@ -395,8 +494,8 @@ export const useWebRTC = (roomCode, playerName) => {
 
     const handlePeerLeft = ({ socketId }) => {
       console.log('👋 Peer left:', socketId);
-      // Buscar peer por socketId y removerlo
-      // (limitación: no tenemos mapeo socketId -> peerId perfecto)
+      // Nota: Buscar peer por socketId es limitado
+      // Si tienes un mapeo socketId -> peerId, úsalo aquí
     };
 
     on('webrtc:existing-peers', handleExistingPeers);
