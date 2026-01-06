@@ -9,7 +9,7 @@ export const useWebRTC = (roomCode, playerName) => {
   const [isMuted, setIsMuted] = useState(false);
   const [error, setError] = useState(null);
   const [myPeerId, setMyPeerId] = useState(null);
-  
+
   const localStreamRef = useRef(null);
   const peerRef = useRef(null);
   const callsRef = useRef({});
@@ -17,31 +17,88 @@ export const useWebRTC = (roomCode, playerName) => {
   const retryTimeoutsRef = useRef({});
 
   // Inicializar PeerJS
+  // Inicializar PeerJS con STUN/TURN
+  // Inicializar PeerJS con ExpressTURN
   useEffect(() => {
+    console.log('🔧 Initializing PeerJS with ExpressTURN...');
+
     const peer = new Peer({
       config: {
         iceServers: [
-          { urls: 'stun:stun.l.google.com:19302' },
-          { urls: 'stun:stun1.l.google.com:19302' },
-          { urls: 'stun:stun2.l.google.com:19302' },
-        ]
-      }
+          // STUN servers (ayudan a descubrir IP pública)
+          {
+            urls: 'stun:stun.l.google.com:19302'
+          },
+          {
+            urls: 'stun:stun1.l.google.com:19302'
+          },
+
+          // TURN server de ExpressTURN (relay cuando STUN no es suficiente)
+          {
+            urls: [
+              'turn:free.expressturn.com:3478',
+              'turn:free.expressturn.com:3478?transport=tcp',
+              'turn:free.expressturn.com:3478?transport=udp'
+            ],
+            username: '000000002083070262',
+            credential: '5+iwCn8l23WEfRzSONL6IQRrhII='
+          },
+
+          // Backup TURN (por si ExpressTURN llega al límite)
+          {
+            urls: [
+              'turn:openrelay.metered.ca:80',
+              'turn:openrelay.metered.ca:443'
+            ],
+            username: 'openrelayproject',
+            credential: 'openrelayproject'
+          }
+        ],
+        iceTransportPolicy: 'all', // Usar todos los métodos disponibles
+        iceCandidatePoolSize: 10
+      },
+      debug: 2 // Logs detallados
     });
 
     peer.on('open', (id) => {
-      console.log('✅ My peer ID:', id);
+      console.log('✅ Peer ID:', id);
+      console.log('🌐 Using ExpressTURN server');
       setMyPeerId(id);
       peerRef.current = peer;
     });
 
     peer.on('call', (call) => {
       console.log('📞 Receiving call from:', call.peer);
-      
+
+      // Logging detallado de ICE
+      call.peerConnection.onicecandidate = (event) => {
+        if (event.candidate) {
+          const type = event.candidate.type;
+          console.log(`🧊 ICE Candidate: ${type}`);
+
+          // Verificar si usa TURN (relay)
+          if (type === 'relay') {
+            console.log('✅ Using TURN server (ExpressTURN)');
+          }
+        }
+      };
+
+      call.peerConnection.oniceconnectionstatechange = () => {
+        const state = call.peerConnection.iceConnectionState;
+        console.log('🔌 ICE State:', state);
+
+        if (state === 'connected') {
+          console.log('✅ P2P connection established!');
+        } else if (state === 'failed') {
+          console.error('❌ Connection failed');
+        }
+      };
+
       if (localStreamRef.current) {
         call.answer(localStreamRef.current);
-        
+
         call.on('stream', (remoteStream) => {
-          console.log('📻 Received stream from:', call.peer);
+          console.log('📻 Stream received from:', call.peer);
           handleRemoteStream(call.peer, remoteStream);
         });
 
@@ -50,22 +107,42 @@ export const useWebRTC = (roomCode, playerName) => {
           removePeer(call.peer);
         });
 
+        call.on('error', (err) => {
+          console.error('❌ Call error:', err);
+        });
+
         callsRef.current[call.peer] = call;
       }
     });
 
     peer.on('error', (err) => {
       console.error('❌ PeerJS error:', err);
-      if (err.type !== 'peer-unavailable') {
+
+      if (err.type === 'peer-unavailable') {
+        console.log('⚠️ Peer unavailable, retrying...');
+      } else if (err.type === 'network') {
+        setError('Error de red - verifica tu conexión');
+      } else {
         setError('Error de conexión P2P');
       }
     });
 
+    peer.on('disconnected', () => {
+      console.log('📴 Peer disconnected');
+
+      if (!peer.destroyed) {
+        console.log('🔄 Reconnecting...');
+        peer.reconnect();
+      }
+    });
+
     return () => {
+      console.log('🧹 Cleaning up peer');
       peer.destroy();
       Object.values(retryTimeoutsRef.current).forEach(timeout => clearTimeout(timeout));
     };
   }, []);
+
 
   // Obtener stream local
   const getLocalStream = useCallback(async () => {
@@ -82,12 +159,12 @@ export const useWebRTC = (roomCode, playerName) => {
       };
 
       console.log('🎤 Requesting microphone access...');
-      
+
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
+
       localStreamRef.current = stream;
       console.log('✅ Local stream obtained');
-      
+
       const audioTrack = stream.getAudioTracks()[0];
       if (audioTrack) {
         console.log('🎤 Audio track:', {
@@ -96,11 +173,11 @@ export const useWebRTC = (roomCode, playerName) => {
           readyState: audioTrack.readyState
         });
       }
-      
+
       return stream;
     } catch (err) {
       console.error('❌ Error getting media:', err);
-      
+
       if (err.name === 'NotAllowedError') {
         setError('Permisos de micrófono denegados');
       } else if (err.name === 'NotFoundError') {
@@ -108,7 +185,7 @@ export const useWebRTC = (roomCode, playerName) => {
       } else {
         setError('No se pudo acceder al micrófono');
       }
-      
+
       throw err;
     }
   }, []);
@@ -116,7 +193,7 @@ export const useWebRTC = (roomCode, playerName) => {
   // Manejar stream remoto - CORREGIDO
   const handleRemoteStream = useCallback((peerId, stream, peerName = 'Jugador') => {
     console.log('🔊 Setting up remote stream for:', peerId, peerName);
-    
+
     // Si ya existe un audio element para este peer, detenerlo
     if (audioElementsRef.current[peerId]) {
       console.log('♻️ Cleaning up existing audio for:', peerId);
@@ -135,7 +212,7 @@ export const useWebRTC = (roomCode, playerName) => {
 
     // Intentar reproducir
     const playPromise = audio.play();
-    
+
     if (playPromise !== undefined) {
       playPromise
         .then(() => {
@@ -143,7 +220,7 @@ export const useWebRTC = (roomCode, playerName) => {
         })
         .catch(error => {
           console.warn('⚠️ Autoplay blocked for:', peerName);
-          
+
           // Guardar para reproducir con interacción del usuario
           if (!window.pendingAudioStreams) {
             window.pendingAudioStreams = new Map();
@@ -170,7 +247,7 @@ export const useWebRTC = (roomCode, playerName) => {
   // Remover peer - MEJORADO
   const removePeer = useCallback((peerId) => {
     console.log('❌ Removing peer:', peerId);
-    
+
     // Cerrar llamada
     if (callsRef.current[peerId]) {
       callsRef.current[peerId].close();
@@ -220,10 +297,10 @@ export const useWebRTC = (roomCode, playerName) => {
     }
 
     console.log(`📞 Calling peer (${retryCount + 1}/${MAX_RETRIES}):`, peerName);
-    
+
     try {
       const call = peerRef.current.call(peerId, localStreamRef.current);
-      
+
       if (!call) {
         console.error('❌ Failed to create call');
         return;
@@ -237,7 +314,7 @@ export const useWebRTC = (roomCode, playerName) => {
         hasReceivedStream = true;
         clearTimeout(streamTimeout);
         handleRemoteStream(peerId, remoteStream, peerName);
-        
+
         if (retryTimeoutsRef.current[peerId]) {
           clearTimeout(retryTimeoutsRef.current[peerId]);
           delete retryTimeoutsRef.current[peerId];
@@ -253,11 +330,11 @@ export const useWebRTC = (roomCode, playerName) => {
       call.on('error', (err) => {
         console.error('❌ Call error:', peerName, err);
         clearTimeout(streamTimeout);
-        
+
         if (!hasReceivedStream && retryCount < MAX_RETRIES) {
           console.log(`🔄 Retrying ${peerName} in ${RETRY_DELAY}ms...`);
           delete callsRef.current[peerId];
-          
+
           retryTimeoutsRef.current[peerId] = setTimeout(() => {
             callPeer(peerId, peerName, retryCount + 1);
           }, RETRY_DELAY);
@@ -278,7 +355,7 @@ export const useWebRTC = (roomCode, playerName) => {
 
     } catch (err) {
       console.error('❌ Exception calling peer:', err);
-      
+
       if (retryCount < MAX_RETRIES) {
         retryTimeoutsRef.current[peerId] = setTimeout(() => {
           callPeer(peerId, peerName, retryCount + 1);
@@ -297,16 +374,16 @@ export const useWebRTC = (roomCode, playerName) => {
     try {
       setError(null);
       await getLocalStream();
-      
+
       console.log('🎤 Joining voice chat with peer ID:', myPeerId);
-      
-      emit('webrtc:join-voice', { 
+
+      emit('webrtc:join-voice', {
         roomCode,
-        peerId: myPeerId 
+        peerId: myPeerId
       });
-      
+
       setIsInVoiceChat(true);
-      
+
     } catch (err) {
       console.error('❌ Failed to join:', err);
       setError('No se pudo acceder al micrófono');
@@ -316,11 +393,11 @@ export const useWebRTC = (roomCode, playerName) => {
   // Salir del chat de voz - MEJORADO
   const leaveVoiceChat = useCallback(() => {
     console.log('🔇 Leaving voice chat');
-    
+
     // Limpiar timeouts
     Object.values(retryTimeoutsRef.current).forEach(timeout => clearTimeout(timeout));
     retryTimeoutsRef.current = {};
-    
+
     // Detener stream local
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach(track => track.stop());
@@ -337,16 +414,16 @@ export const useWebRTC = (roomCode, playerName) => {
     // Cerrar llamadas
     Object.values(callsRef.current).forEach(call => call.close());
     callsRef.current = {};
-    
+
     // Limpiar pending
     if (window.pendingAudioStreams) {
       window.pendingAudioStreams.clear();
     }
-    
+
     setPeers({});
     emit('webrtc:leave-voice', { roomCode });
     setIsInVoiceChat(false);
-    
+
   }, [roomCode, emit]);
 
   // Toggle mute
@@ -371,7 +448,7 @@ export const useWebRTC = (roomCode, playerName) => {
 
     const handleExistingPeers = ({ peers: existingPeers }) => {
       console.log('📋 Existing peers:', existingPeers.length);
-      
+
       if (existingPeers.length > 0) {
         setTimeout(() => {
           existingPeers.forEach(({ peerId, peerName }) => {
@@ -385,7 +462,7 @@ export const useWebRTC = (roomCode, playerName) => {
 
     const handlePeerJoined = ({ peerId, peerName }) => {
       console.log('👤 Peer joined:', peerName);
-      
+
       if (peerId !== myPeerId && localStreamRef.current) {
         setTimeout(() => {
           callPeer(peerId, peerName);
